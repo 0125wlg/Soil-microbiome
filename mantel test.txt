@@ -1,0 +1,94 @@
+
+#用多样性计算
+
+
+# 设置工作目录
+setwd("D://桌面////论文//【小论文4】//中间数据1//Mantel_test热图1")
+
+# 读取CSV文件
+data <- read.csv("细菌和放线菌多样性.csv", stringsAsFactors = FALSE)
+
+# 检查数据的前几行以确保正确读取
+head(data)
+
+# 使用dplyr进行分组和汇总，对genus列的重复项进行合并，并对其他列进行求和
+library(dplyr)
+
+summarized_data <- data %>%
+  group_by(genus) %>%
+  summarise(across(everything(), sum, na.rm = TRUE), .groups = "drop")
+
+# 查看结果
+print(summarized_data)
+
+# 保存结果到新的CSV文件
+write.csv(summarized_data, "otuv1.csv", row.names = FALSE)
+
+# 加载包
+library(vegan)
+library(dplyr)
+library(ggcor)
+library(ggplot2)
+
+# 加载数据
+df <- read.csv("otuv1.csv", header = TRUE, row.names = 1, check.names = FALSE)
+df <- data.frame(t(df))
+
+env <- read.csv("env1.csv", header = TRUE, row.names = 1, check.names = FALSE)
+
+# 绘制环境因子热图
+p <- quickcor(env,
+              type = "upper",
+              method = "pearson",
+              show.diag = TRUE) +
+  geom_square() +
+  scale_fill_gradient2(high = '#fe6263', mid = 'white', low = '#7caaff')
+print(p)
+
+# Mantel检验
+df_mantel <- mantel_test(df, env,
+                         mantel.fun = 'mantel',
+                         spec.dist.method = 'bray',
+                         env.dist.method = 'euclidean',
+                         spec.select = list("A_Diversity" = 1:2,
+                                            "B_Diversity" = 3:4))
+print(df_mantel)
+# 定义标签和连线类型 --------------------------------------------------------
+df_mantel <- df_mantel %>%
+  mutate(
+    df_r = cut(r, breaks = c(-Inf, 0.25, 0.5, Inf),
+               labels = c("< 0.25", "0.25 - 0.5", ">= 0.5")),
+    df_p = cut(p.value, breaks = c(-Inf, 0.01, 0.05, Inf),
+               labels = c("< 0.01", "0.01 - 0.05", ">= 0.05"))
+  )
+
+df_mantel$linetype <- ifelse(df_mantel$p.value >= 0.05, 2, 1)
+df_mantel$linetype <- factor(df_mantel$linetype, levels = c("1", "2"))
+
+# 组合绘图 ----------------------------------------------------------------
+
+p <- quickcor(env, type = "upper", method = "pearson", show.diag = TRUE, cor.test = TRUE) +
+  geom_square() +
+  scale_fill_gradient2(high = '#fe6263', mid = 'white', low = '#7caaff') +
+  geom_square() +
+  geom_mark(r = NA, sig.thres = 0.05, size = 6, color = "black") +
+  anno_link(df_mantel,
+            aes(color = df_p, size = df_r, linetype = linetype),
+            label.size = 4,
+            label.fontface = 1,
+            curvature = 0.2,
+            nudge_x = 0.2) +
+  scale_size_manual(values = c(0.8, 1.4, 2)) +
+  scale_color_manual(values = c("#ffa83a", "#dc4fff", "#cacdd2")) +
+  scale_linetype_manual(values = c(1, 2), labels = c("Positive correlation", "Negative correlation")) + # 修改标签
+  guides(
+    fill = guide_colorbar(title = "Pearson's r", order = 1),
+    size = guide_legend(title = "Mantel's r", order = 2),
+    color = guide_legend(title = "p-value", order = 3),
+    linetype = guide_legend(title = "Relation ship", order = 4) # 添加 linetype 图例
+  )
+
+p
+# 保存图表
+ggsave("土壤细菌和放线菌与土壤因子.png", plot = p, width = 9, height = 8, dpi = 300)
+

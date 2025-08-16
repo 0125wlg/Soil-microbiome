@@ -1,0 +1,205 @@
+
+
+#放线菌年
+# 设置工作目录
+setwd("D://桌面////论文//【小论文4】//中间数据1//最小二乘法的结构方程模型")
+
+#修改代码
+
+
+# 加载必要的R包
+library(plspm)
+library(dplyr)
+
+# 读取数据
+#data <- read.csv(file.choose(), header = TRUE)
+data <- read.csv("放线菌.csv", header = TRUE)
+# 指定变量关系
+comdata <- list(
+  SW=c("SW"),
+  AK = "AK", 
+  AN = "AN", 
+  AP = "AP",
+  
+  Diversity=c("Chao","shannon")
+)
+
+# 定义潜变量列表（包含模型中所有潜变量）
+latent_vars <- c("SW", "AK", "AN", "AP", "Diversity")
+
+# 将路径关系用公式列表表示
+model_formulas <- list(
+  Diversity = ~ SW + AN + AK+AP,
+  AK   = ~ AP+SW+AN,
+  AN   = ~ AP+AK+SW,
+  AP   = ~ AK+AN
+
+)
+
+# 创建一个全0矩阵，用于存储路径关系
+dat_path <- matrix(0, nrow = length(latent_vars), ncol = length(latent_vars),
+                   dimnames = list(latent_vars, latent_vars))
+
+# 根据公式自动填充路径矩阵
+for (end_var in names(model_formulas)) {
+  # 提取公式右侧的自变量
+  rhs_vars <- all.vars(model_formulas[[end_var]])
+  # 将对应位置标记为1
+  dat_path[end_var, rhs_vars] <- 1
+}
+
+# 确保路径矩阵是下三角矩阵
+dat_path <- dat_path * lower.tri(dat_path)
+
+# 输出路径矩阵
+print(dat_path)
+
+
+# 定义测量模式（"A"或"P"）
+dat_modes <- rep("A", length(comdata))  # 使长度匹配 comdata
+
+# 运行PLS-PM模型
+dat_pls <- plspm(data, dat_path, comdata, modes = dat_modes)
+
+
+
+# 定义测量模式（"A"或"P"）
+#dat_modes <- c("A", 6)
+
+# 运行PLS-PM模型
+#dat_pls <- plspm(data, dat_path, comdata, modes = dat_modes)
+
+# 查看PLS-PM模型结果
+#summary(dat_pls)
+
+# 将完整控制台输出保存到文本文件（保留格式和注释）
+sink("PLS_PM_Full_Report.txt")
+summary(dat_pls)
+sink()  # 关闭输出重定向
+
+# 或更灵活地捕获输出（可后续编辑）
+report <- capture.output(summary(dat_pls))
+writeLines(report, "放线菌结果.txt")
+
+#查看因果关系的路径图，详情 ?innerplot
+innerplot(dat_pls, colpos = 'red', colneg = 'blue', show.values = TRUE, lcol = 'gray', box.lwd = 0)
+
+# 提取路径系数
+inner_model <- dat_pls$inner_model
+
+
+# 提取路径系数，去掉 Intercept 信息
+path_coefficients <- bind_rows(lapply(names(inner_model), function(name) {
+  data.frame(
+    Predictor = rownames(inner_model[[name]]),
+    Response = name,
+    Estimate = inner_model[[name]][, "Estimate"],
+    StdError = inner_model[[name]][, "Std. Error"],
+    tValue = inner_model[[name]][, "t value"],
+    pValue = inner_model[[name]][, "Pr(>|t|)"]
+  )
+})) %>%
+  filter(Predictor != "Intercept")  # 去掉 Intercept 信息
+
+# 提取 R² 值
+r_squared <- as.data.frame(dat_pls$inner_summary) %>%
+  select(Type, R2) %>%
+  filter(Type == "Endogenous") %>%
+  mutate(Response = rownames(.)) %>%
+  select(Response, R2)
+
+# 将 R² 值与路径系数表合并
+path_coefficients <- path_coefficients %>%
+  left_join(r_squared, by = "Response") %>%
+  arrange(Response, Predictor) %>%
+  mutate(Significance = ifelse(pValue < 0.001, "***",
+                               ifelse(pValue < 0.01, "**",
+                                      ifelse(pValue < 0.05, "*", "ns"))))
+
+# 打印整理后的路径系数和 R² 值表
+print(path_coefficients)
+
+write.csv(path_coefficients, "放线菌path.csv", row.names = FALSE)
+
+#goodness-of-fit 值可以帮助评估模型优度
+dat_pls$gof
+
+#(在使用 PLS-PM 进行模型评估时，
+#还需要结合其他指标（如路径系数的显著性、R² 值、交叉验证的冗余度等）进行综合判断，
+#而非仅依赖 GoF 值。Gof大于0.33是个经验值。
+#GoF < 0.1：差的模型拟合；0.1 ≤ GoF < 0.25：弱的拟合；
+#0.25 ≤ GoF < 0.33：中等拟合；GoF ≥ 0.33：强拟合
+
+#查看变量间的直接或间接影响状态
+dat_pls$effects
+
+dat_pls$inner_summary
+#R² > 0.67：强解释力；R² > 0.33：中等解释力；R² < 0.19：弱解释力
+summary(dat_pls)$boot
+dat_pls$outer_model
+dat_pls$inner_summary#冗余度 > 0.5 表示内生潜变量对观测变量的解释力较强。
+#冗余度 < 0.5 表示内生潜变量对观测变量的解释力较弱。
+# 加载必要的包
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+
+# 示例数据
+dat_pls_effects <-dat_pls$effects
+
+# 筛选出对 Diversity 的影响
+trad_effects <- dat_pls_effects %>%
+  filter(grepl("-> Diversity$", relationships))
+
+# 去掉 "-> Diversity" 只保留指标名称
+trad_effects <- trad_effects %>%
+  mutate(relationships = gsub(" -> Diversity", "", relationships))
+
+# 转换为长格式
+trad_effects_long <- trad_effects %>%
+  pivot_longer(
+    cols = c(direct, indirect, total),
+    names_to = "effect_type",
+    values_to = "effect_size"
+  )
+
+# 自定义 X 轴指标显示顺序（按需调整顺序）
+custom_order <- c("SW", "AN", "AK", "AP")  # 自定义顺序
+
+trad_effects_long <- trad_effects_long %>%
+  mutate(relationships = factor(relationships, levels = custom_order))
+
+# 绘制柱状图
+p<-ggplot(trad_effects_long, aes(x = relationships, y = effect_size, fill = effect_type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    x = "Predictor",
+    y = "Effect Size (Standardized)",
+    title = "Effects on TRAD: Direct, Indirect, and Total"
+  ) +
+  scale_fill_manual(
+    values = c(
+      "direct" = "#008CB7",
+      "indirect" = "#A5C98C",
+      "total" = "#FFBD00"
+    ),
+    labels = c(
+      "direct" = "Direct Effect",
+      "indirect" = "Indirect Effect",
+      "total" = "Total Effect"
+    )
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    legend.title = element_blank()
+  ) +
+  geom_hline(yintercept = 0, linetype = "solid", color = "black", linewidth = 0.5) +  # 添加水平线
+  ylim(-1, 1)  # 设置 Y 轴范围
+p
+
+
+# 使用 ggsave() 保存图表
+ggsave("放线菌.png", plot = p, width =8, height = 6, dpi = 300)
+
+

@@ -1,0 +1,56 @@
+
+
+# 清空环境变量
+rm(list = ls())
+
+setwd("D://桌面//论文//【小论文4】//中间数据1//多样性计算")
+
+# 加载必要的R包
+library(otuSummary)
+library(tidyverse)
+library(reshape2)
+library(ggplot2)
+library(ggpubr)
+library(ggsci)
+library(ggsignif)
+library(gghalves)
+
+# 加载OTU数据
+otu <- read.csv("D://桌面//论文//【小论文4】//原始数据1//JTTFBacteria.csv", header = TRUE, row.names = 1)
+
+# 转置数据，使样本名位于行中
+otu_t <- t(otu)
+
+# 计算α多样性指数
+alpha <- alphaDiversity(
+  otutab = otu_t,        # 转置后的数据
+  siteInCol = FALSE,     # 样本名在行中
+  taxhead = NULL,        # 如果没有注释列，设置为 NULL
+  threshold = 1,         # 相对丰度阈值
+  percent = FALSE,       # 数据为绝对丰度
+  write = FALSE          # 不自动保存结果
+)
+
+# 查看α多样性指数结果
+head(alpha)
+
+# 提取整体群落的α多样性指数
+data <- alpha$allBio
+head(data)
+
+# 读取自定义分组信息（假设文件为 "groups.csv"）
+custom_groups <- read.csv("D://桌面//论文//【小论文4】//原始数据1//group_info.csv", stringsAsFactors = FALSE)
+head(custom_groups)
+
+# 确保custom_groups中的样本名与data中的行名匹配
+# 将data的行名转换为一个新列，命名为 "sample"
+data$sample <- row.names(data)
+
+# 合并分组信息到data中
+data <- merge(data, custom_groups, by.x = "sample", by.y = "sample", all.x = TRUE, suffixes = c("", "_y"))
+
+# 查看添加了自定义分组信息后的数据框
+head(data)
+
+# 保存结果到新的CSV文件
+write.csv(data, "B多样性.csv", row.names = FALSE)

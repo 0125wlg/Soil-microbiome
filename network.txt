@@ -1,0 +1,145 @@
+import pandas as pd
+import networkx as nx
+import numpy as np
+from joblib import Parallel, delayed
+from tqdm import tqdm
+from scipy.spatial.distance import pdist, squareform
+
+# ================== 参数设定 ==================
+ABUNDANCE_THRESHOLD = 0.0005  # 只保留丰度占比 > 0.01% 的OTU
+SIMILARITY_THRESHOLD = 0.7  # 相关性筛选阈值（|相关性| > 0.95 才保留）
+
+# ================== 加载数据并预处理 ==================
+def load_and_filter_data(file_path):
+    print("加载数据...")
+    species_data = pd.read_csv(file_path)
+
+    # 筛选丰度占比大于指定阈值的 OTU
+    total_abundance = species_data.iloc[:, 1:].sum().sum()
+    species_data_filtered = species_data.loc[
+        (species_data.iloc[:, 1:].sum(axis=1) / total_abundance) > ABUNDANCE_THRESHOLD
+        ]
+
+    print(f"筛选后剩余 {species_data_filtered.shape[0]} 个OTU")
+    return species_data_filtered
+
+# ================== 计算相似性矩阵 ==================
+def compute_similarity_matrix(data):
+    print("计算相似性矩阵...")
+    similarity_matrix = 1 - squareform(pdist(data.iloc[:, 1:], metric='correlation'))
+    return pd.DataFrame(similarity_matrix, index=data.iloc[:, 0], columns=data.iloc[:, 0])
+
+# ================== 构建网络 ==================
+def build_network(similarity_df, threshold=SIMILARITY_THRESHOLD):
+    G = nx.Graph()
+    nodes = similarity_df.index.tolist()
+    G.add_nodes_from(nodes)
+
+    def add_edges(i):
+        row = similarity_df.iloc[i].values
+        edges = []
+        for j in np.where(np.abs(row) > threshold)[0]:
+            if i != j:
+                edge_weight = np.abs(row[j])  # 使用相关性的绝对值作为边的权重
+                edge_type = "positive" if row[j] > 0 else "negative"
+                edges.append((nodes[i], nodes[j], {'weight': edge_weight, 'correlation_type': edge_type}))
+        return edges
+
+    print("开始添加边...")
+    results = Parallel(n_jobs=4, backend='loky')(
+        delayed(add_edges)(i) for i in tqdm(range(len(nodes)), desc="Adding Edges"))
+
+    for edge_list in results:
+        G.add_edges_from(edge_list)
+
+    return G
+
+# ================== 添加节点分类信息 ==================
+def add_taxonomy_information(G, taxonomy_file):
+    print("读取分类信息...")
+    tax = pd.read_csv(taxonomy_file, index_col=0)  # 读取分类信息
+    for node in G.nodes():
+        if node in tax.index:
+            G.nodes[node]['Kingdom'] = tax.loc[node, 'Kingdom']
+            G.nodes[node]['Phylum'] = tax.loc[node, 'Phylum']
+            G.nodes[node]['Class'] = tax.loc[node, 'Class']
+            G.nodes[node]['Order'] = tax.loc[node, 'Order']
+            G.nodes[node]['Family'] = tax.loc[node, 'Family']
+            G.nodes[node]['Genus'] = tax.loc[node, 'Genus']
+            G.nodes[node]['Species'] = tax.loc[node, 'Species']
+    return G
+
+# ================== 计算网络拓扑性质 ==================
+def analyze_network(G):
+    print("计算网络拓扑性质...")
+
+    # 计算度中心性（Degree Centrality）
+    degree_centrality = nx.degree_centrality(G)
+
+    # 计算紧密中心性（Closeness Centrality），如果网络是连通的
+    closeness_centrality = nx.closeness_centrality(G) if nx.is_connected(G) else {}
+
+    # 计算介数中心性（Betweenness Centrality），使用采样计算
+    betweenness_centrality = nx.betweenness_centrality(G, k=min(500, len(G)))
+
+    # 计算聚类系数（Clustering Coefficient）
+    clustering_coefficient = nx.clustering(G)
+
+    # 计算网络直径（Diameter）
+    if nx.is_connected(G):
+        diameter = nx.diameter(G)
+    else:
+        largest_cc = max(nx.connected_components(G), key=len)
+        subgraph = G.subgraph(largest_cc)
+        diameter = nx.diameter(subgraph)
+
+    # 计算网络传递性（Transitivity）
+    transitivity = nx.transitivity(G)
+
+    print(f"Degree Centrality: {list(degree_centrality.items())[:5]} ...")
+    print(f"Betweenness Centrality: {list(betweenness_centrality.items())[:5]} ...")
+    print(f"Clustering Coefficient: {list(clustering_coefficient.items())[:5]} ...")
+    print(f"Diameter: {diameter}")
+    print(f"Transitivity: {transitivity}")
+
+    # 将每个节点的度添加为节点属性
+    for node in G.nodes():
+        G.nodes[node]['Degree'] = G.degree(node)
+
+    # 保存节点拓扑性质
+    node_metrics = pd.DataFrame({
+        "Node": list(G.nodes()),
+        "Degree": [G.degree(n) for n in G.nodes()],
+        "Degree Centrality": [degree_centrality.get(n, 0) for n in G.nodes()],
+        "Closeness Centrality": [closeness_centrality.get(n, 0) for n in G.nodes()],
+        "Betweenness Centrality": [betweenness_centrality.get(n, 0) for n in G.nodes()],
+        "Clustering Coefficient": [clustering_coefficient.get(n, 0) for n in G.nodes()]
+    })
+
+    node_metrics.to_csv('1TFA_network_node_metrics.csv', index=False)
+
+    print("导出网络...")
+    nx.write_gexf(G, '1TFA.gexf')
+
+# ================== 主程序 ==================
+if __name__ == "__main__":
+    # 数据路径
+    data_file = r'D:\桌面\论文\【小论文4】\中间数据\网络图\TFActionbacteriota.csv'
+    taxonomy_file = r'D:\桌面\论文\【小论文4】\中间数据\网络图\Actionbacteriota.csv'
+
+    # 加载并过滤数据
+    species_data_filtered = load_and_filter_data(data_file)
+
+    # 计算相似性矩阵
+    similarity_df_species = compute_similarity_matrix(species_data_filtered)
+
+    # 构建网络
+    G_species = build_network(similarity_df_species)
+
+    # 添加分类信息到网络节点
+    G_species = add_taxonomy_information(G_species, taxonomy_file)
+
+    # 分析网络拓扑性质
+    analyze_network(G_species)
+
+    print("网络分析完成！")
